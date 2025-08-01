@@ -1,0 +1,28 @@
+[project]
+name = "irgen"
+dynamic = ["version"]
+description = "convert register description spreadsheets into IP-XACT XML files."
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastexcel",
+    "polars",
+    "pydantic",
+    "pydantic-xml",
+    "ruff",
+    "xlsxwriter"
+]
+
+[project.scripts]
+irgen = "irgen.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/irgen/__version__.py"
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
