@@ -147,11 +147,10 @@ def main():
         logging.info("Assembling final component structure...")
         for block in address_blocks:
             if block.name in all_registers:
-                register_list = block.register
                 for reg in all_registers[block.name]:
-                    register_list.append(reg)
+                    block.registers.append(reg)
                 logging.info(
-                    f"Mapped {len(register_list)} registers to address block '{block.name}'."
+                    f"Mapped {len(block.registers)} registers to address block '{block.name}'."
                 )
             else:
                 logging.warning(
@@ -173,7 +172,7 @@ def main():
         logging.info(f"XML file will be generated at: {xml_path}")
 
         with open(xml_path, "wb") as f:
-            f.write(component.to_xml())
+            f.write(component.to_xml(exclude_none=True))
 
     except Exception as e:
         logging.critical(f"An error occurred during processing: {e}")

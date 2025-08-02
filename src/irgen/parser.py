@@ -19,74 +19,59 @@ from irgen.schema.ipxact import (
 
 
 def parse_dataframe(df: pl.DataFrame) -> pl.DataFrame:
-    parsed_df = (
-        df.with_columns(
-            header_reg=pl.first("REG").over("ADDR"),
-            start_addr_str=pl.first("ADDR").over("ADDR"),
-            stride=(
-                pl.col("WIDTH")
-                .filter(pl.col("FIELD").is_not_null() & (pl.col("FIELD") != ""))
-                .sum()
-                .over("ADDR")
-                // 8  # 1Byte = 8bits
-            ),
-        )
-        .with_columns(
-            is_expandable=pl.col("header_reg").str.contains(r"\{n\}"),
-            base_reg_name=pl.coalesce(
-                pl.col("header_reg").str.extract(r"(.*?)\{n\}"), pl.lit("")
-            ),
-            n_start=pl.col("header_reg")
-            .str.extract(r"n\s*=\s*(\d+)", 1)
-            .cast(pl.Int64),
-            n_end=pl.col("header_reg").str.extract(r"~\s*(\d+)", 1).cast(pl.Int64),
-            start_addr_int=pl.col("start_addr_str")
-            .str.extract(r"0x([0-9a-fA-F]+)")
-            .str.to_integer(base=16, strict=True),
-        )
-        .with_columns(
-            n_series=pl.when(
-                pl.col("is_expandable")
-                & pl.col("n_start").is_not_null()
-                & pl.col("n_end").is_not_null()
+    try:
+        parsed_df = (
+            df.with_columns(
+                REG_WIDTH = pl.col("WIDTH").cast(pl.Int32).sum().over("ADDR"),
+                BYTES = (pl.col("WIDTH").cast(pl.Int32).sum().over("ADDR") // 8),
+                BASE_REG = pl.coalesce(
+                    pl.col("REG").first().over("ADDR").str.extract(r"(.*?)\{n\}"), pl.lit("")
+                ),
+                IS_EXPANDABLE = pl.col("REG").first().over("ADDR").str.contains(r"\{n\}"),
+                START = pl.col("REG").first().over("ADDR").str.extract(r"n\s*=\s*(\d+)").cast(pl.Int32),
+                END = pl.col("REG").first().over("ADDR").str.extract(r"~\s*(\d+)").cast(pl.Int32),
+                BASE_ADDR = pl.col("ADDR").first().over("ADDR").str.extract("0x([0-9a-fA-F]+)").str.to_integer(base=16, strict=False),
+                BIT_OFFSET = pl.col("BIT").over("ADDR").str.extract(r"\[(?:\d+:)?(\d+)]"),
             )
-            .then(pl.int_ranges(pl.col("n_start"), pl.col("n_end") + 1))
-            .otherwise(pl.lit(None))
-        )
-        .explode("n_series")
-        .filter(
-            (pl.col("is_expandable") & pl.col("n_series").is_not_null())
-            | (
-                ~pl.col("is_expandable")
-                & pl.col("FIELD").is_not_null()
-                & (pl.col("FIELD") != "")
+            .with_columns(
+                N_SERIES=pl.when(
+                    pl.col("IS_EXPANDABLE")
+                    & pl.col("START").is_not_null()
+                    & pl.col("END").is_not_null()
+                )
+                .then(pl.int_ranges(pl.col("START"), pl.col("END") + 1))
+                .otherwise(pl.lit(None))
+            )
+            .explode("N_SERIES")
+            .filter(
+                (pl.col("IS_EXPANDABLE") & pl.col("N_SERIES").is_not_null())
+                | (
+                    ~pl.col("IS_EXPANDABLE")
+                    & pl.col("FIELD").is_not_null()
+                    & (pl.col("FIELD") != "")
+                )
+            )
+            .with_columns(
+                ADDR=pl.when(pl.col("IS_EXPANDABLE"))
+                .then(
+                    (
+                        pl.col("BASE_ADDR") + pl.col("N_SERIES") * pl.col("BYTES")
+                    ).map_elements(lambda x: f"0x{x:X}", return_dtype=pl.String)
+                )
+                .otherwise(pl.col("ADDR")),
+                REG=pl.when(pl.col("IS_EXPANDABLE"))
+                .then(pl.col("BASE_REG") + "_" + pl.col("N_SERIES").cast(pl.String))
+                .otherwise(pl.col("REG")),
+            )
+            .filter(
+                ~pl.col("FIELD")
+                .str
+                .contains(r"^(rsvd|reserved)\d*$")
             )
         )
-        .with_columns(
-            ADDR=pl.when(pl.col("is_expandable"))
-            .then(
-                (
-                    pl.col("start_addr_int") + pl.col("n_series") * pl.col("stride")
-                ).map_elements(lambda x: f"0x{x:X}", return_dtype=pl.String)
-            )
-            .otherwise(pl.col("ADDR")),
-            REG=pl.when(pl.col("is_expandable"))
-            .then(pl.col("base_reg_name") + "_" + pl.col("n_series").cast(pl.String))
-            .otherwise(pl.col("REG")),
-        )
-    )
-
-    parsed_df = parsed_df.select(
-        "ADDR",
-        "REG",
-        "FIELD",
-        "BIT",
-        "WIDTH",
-        "ATTRIBUTE",
-        "DEFAULT",
-        "DESCRIPTION",
-        "stride",
-    )
+    except pl.exceptions.PolarsError as e:
+        logging.error(f"Failed to process register sheet: {e}")
+        raise
 
     return parsed_df
 
@@ -133,7 +118,7 @@ def process_address_map_sheet(
                 base_address = str(row["OFFSET"]),
                 range = str(row["RANGE"]),
                 width = "32",
-                register=[],
+                registers=[],
             )
 
             address_blocks.append(address_block)
@@ -171,31 +156,14 @@ def process_register_sheet(
 
         for field_row in group.iter_rows(named=True):
             try:
-                bit_match = re.findall(r"\[(?:\d+:)?(\d+)]", str(field_row["BIT"]))
-                if not bit_match:
-                    raise ValueError(
-                        f"Could not parse bit offset from '{field_row['BIT']}"
-                    )
-
-                if re.match(r"^(rsvd|reserved)\d*$", str(field_row["FIELD"])):
-                    continue
-
-                if get_modified_write_value(str(field_row["ATTRIBUTE"])) is not None:
-                    modified_write_val = get_modified_write_value(str(field_row["ATTRIBUTE"]))
-                else:
-                    modified_write_val = None
-                if get_read_action_value(str(field_row["ATTRIBUTE"])) is not None:
-                    read_action_val = get_read_action_value(str(field_row["ATTRIBUTE"]))
-                else:
-                    read_action_val = None
 
                 field = FieldType(
-                    bit_offset=str(bit_match[0]),
+                    bit_offset=str(field_row["BIT_OFFSET"]),
                     bit_width=str(field_row["WIDTH"]),
                     name=str(field_row["FIELD"]),
                     access=get_access_value(str(field_row["ATTRIBUTE"])),
-                    modified_write_value=modified_write_val,
-                    read_action=read_action_val,
+                    modified_write_value=get_modified_write_value(str(field_row["ATTRIBUTE"])),
+                    read_action=get_read_action_value(str(field_row["ATTRIBUTE"])),
                     resets=ResetsType(reset = [
                         ResetType(
                             value=str(field_row["DEFAULT"])
@@ -213,7 +181,7 @@ def process_register_sheet(
         if fields:
             register = RegisterType(
                 address_offset = str(first_row["ADDR"]),
-                size = str(int(first_row["stride"]) * 8),
+                size = str(first_row["REG_WIDTH"]),
                 name = str(reg_name[0]),
                 field = fields,
             )

@@ -39,7 +39,7 @@ class BlockType(BaseXmlModel):
     base_address: str = element(tag="ipxact:baseAddress")
     range: str = element(tag="ipxact:range")
     width: str = element(tag="ipxact:width")
-    register: list[RegisterType] = element(tag="ipxact:register")
+    registers: list[RegisterType] = element(tag="ipxact:register")
 
 
 class MemoryMapType(BaseXmlModel):
