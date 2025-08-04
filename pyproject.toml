@@ -23,6 +23,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 path = "src/irgen/__version__.py"
-
-[[tool.uv.index]]
-url = "https://mirrors.aliyun.com/pypi/simple/"
