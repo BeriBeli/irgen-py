@@ -38,3 +38,4 @@ def generate_template():
             register_df.write_excel(workbook=wb, worksheet="register_template")
     except Exception as e:
         logging.error(f"Failed to write templates: {e}")
+        raise

@@ -1,14 +1,13 @@
-import re
 import logging
 
 import polars as pl
 
-from irgen.attribute import (
+from .attribute import (
     get_access_value,
     get_modified_write_value,
     get_read_action_value,
 )
-from irgen.schema.ipxact import (
+from .schema.ipxact import (
     ComponentType,
     BlockType,
     RegisterType,
@@ -76,33 +75,25 @@ def parse_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     return parsed_df
 
 
-def process_vendor_sheet(df: pl.DataFrame) -> ComponentType | None:
+def process_vendor_sheet(df: pl.DataFrame) -> ComponentType:
     """Process the Sheet<vendor> to create an IP-XACT Component object"""
     try:
-
-        def get_tag_value(tag: str) -> str:
-            value = df.filter(pl.col("TAG") == tag)["VALUE"]
-            if value.is_empty():
-                raise ValueError(f"Tag '{tag}' not found in the Sheet<vendor> ")
-            return str(value[0])
-
         component = ComponentType(
-            vendor = get_tag_value("VENDOR"),
-            library = get_tag_value("LIBRARY"),
-            name = get_tag_value("NAME"),
-            version = get_tag_value("VERSION"),
+            vendor = df["VENDOR"][0],
+            library = df["LIBRARY"][0],
+            name = df["NAME"][0],
+            version = df["VERSION"][0],
             memory_maps=None,
         )
-
         return component
     except (pl.exceptions.PolarsError, ValueError, KeyError) as e:
         logging.error(f"Failed to process the Sheet<vendor>: {e}")
-        return None
+        raise
     except Exception as e:
         logging.error(
             f"An unexpected error occurred while processing the Sheet<vendor>: {e}"
         )
-        return None
+        raise
 
 
 def process_address_map_sheet(
@@ -126,6 +117,7 @@ def process_address_map_sheet(
             logging.error(
                 f"Missing expected column in address_map sheet: {e}. Skipping row: {row}"
             )
+            raise
     return address_blocks
 
 
@@ -142,7 +134,7 @@ def process_register_sheet(
         logging.debug(f"parsed_df is {parsed_df}")
     except pl.exceptions.PolarsError as e:
         logging.error(f"Polars error during pre-processing of a register sheet: {e}")
-        return []
+        raise
 
     registers = []
     # Group by register to process all its fields together
@@ -177,6 +169,7 @@ def process_register_sheet(
                 logging.error(
                     f"Skipping invalid field '{field_row.get('FIELD', 'N/A')}' in register '{reg_name[0]}': {e}"
                 )
+                raise
 
         if fields:
             register = RegisterType(
