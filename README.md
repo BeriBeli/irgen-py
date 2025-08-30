@@ -1,5 +1,7 @@
 # irgen
 
+a script to convert specified spreadsheet to IP-XACT
+
 # Dependency
 
 [python](https://www.python.org/) >= 3.10
@@ -48,4 +50,5 @@
 ```shell
 irgen -i example.xlsx
 ```
+
 
